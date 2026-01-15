@@ -512,55 +512,8 @@ if uploaded_file:
                 "📊 Complexidade DAX",
                 f"{score_medio}/100",
                 delta=class_modelo,
-                help="Score de 0 a 100 baseado em 5 dimensões (Funções, Contexto, Estrutura, Dependências, Anti-patterns).\n\n👇 Abra a seção 'ℹ️ Entenda o Cálculo' abaixo para ver a tabela de regras completa."
+                help="Score de 0 a 100 baseado em 5 dimensões (Funções, Contexto, Estrutura, Dependências, Anti-patterns).\n\n👇 Abra a seção 'ℹ️ Entenda o Cálculo' abaixo da tabela de ranking para ver a tabela de regras completa."
             )
-            
-            # ℹ️ TABELA DE REGRAS DE COMPLEXIDADE (Expansível)
-            with st.expander("ℹ️ Entenda o Cálculo da Complexidade (Tabela de Regras)", expanded=False):
-                st.markdown("""
-                ### 📊 Como o Score é calculado?
-                O score começa em **0** e acumula pontos de penalidade. Quanto menor, melhor.
-                O KPI final é normalizado para **0-100**.
-                
-                #### 1️⃣ D1: Funções DAX (Peso Alto)
-                | Função | Penalidade | Motivo |
-                |---|---|---|
-                | `SUMX`, `AVERAGEX`, `MINX`, `MAXX` | **+8** pts | Iterador (força Formula Engine) |
-                | `RANKX` | **+12** pts | Custo computacional alto |
-                | `FILTER` | **+10** pts | Iteração muitas vezes desnecessária |
-                | `ADDCOLUMNS` | **+10** pts | Materialização temporária |
-                | `SUMMARIZE`, `SUMMARIZECOLUMNS` | **+12** pts | Complexo para otimizar |
-                | `GENERATE` | **+15** pts | Cross join custoso |
-                | `EARLIER` | **+20** pts | Difícil leitura/manutenção |
-                
-                #### 2️⃣ D2: Contexto e CALCULATE
-                | Regra | Penalidade |
-                |---|---|
-                | Cada `CALCULATE` | **+5** pts |
-                | `CALCULATE` com múltiplos filtros | **+3** pts por filtro extra |
-                | `ALL`, `ALLEXCEPT`, `REMOVEFILTERS` | **+6** pts |
-                | `KEEPFILTERS` | **+3** pts |
-                
-                #### 3️⃣ D3: Estrutura do Código
-                | Métrica | Pontos |
-                |---|---|
-                | Mais de 10 linhas | **+5** pts |
-                | Mais de 20 linhas | **+10** pts |
-                | Uso de Variáveis (`VAR`) | **-5** pts (BÔNUS 🟢) |
-                | Comentários (`--` ou `//`) | **-2** pts (BÔNUS 🟢) |
-                
-                #### 4️⃣ D4: Dependências
-                | Item | Penalidade |
-                |---|---|
-                | Por medida dependente | **+2** pts |
-                
-                #### 5️⃣ D5: Anti-patterns (Erros Comuns)
-                | Anti-pattern | Penalidade |
-                |---|---|
-                | `FILTER(ALL(Tabela))` | **+20** pts (Muito ineficiente) |
-                | Time Intelligence Manual | **+8** pts (Use funções nativas) |
-                """)
-        
 
             # --- 6. GERAÇÃO DO GRAFO COM ÍCONES (MELHORIA 27) ---
             # Ícones por tipo de objeto
@@ -642,9 +595,22 @@ if uploaded_file:
                     desc = nx.descendants(G, medida)
                     medidas_impacto_lista.append({'medida': medida, 'impacto': len(desc)})
             
-            # Preparar top complexas se disponível
-            top_complexas_export = sorted(todas_medidas_complexas, key=lambda x: x['score'], reverse=True) if 'todas_medidas_complexas' in locals() and todas_medidas_complexas else []
-
+            # Calcular todas medidas complexas para o relatório de exportação
+            global_dependentes_count = df[col_destino].value_counts().to_dict()
+            todas_medidas_complexas = []
+            for nome_medida, info in info_map.items():
+                if info.get("tipo") == "MEASURE":
+                    exp = info.get("exp", "")
+                    n_dependentes = global_dependentes_count.get(nome_medida, 0)
+                    score, classificacao, _ = calcular_complexity_score(exp, nome_medida, n_dependentes)
+                    todas_medidas_complexas.append({
+                        'medida': nome_medida, 
+                        'score': score, 
+                        'classificacao': classificacao
+                    })
+            
+            # Preparar top complexas para exportação
+            top_complexas_export = sorted(todas_medidas_complexas, key=lambda x: x['score'], reverse=True) if todas_medidas_complexas else []
             relatorio_txt = gerar_relatorio_texto(metricas_relatorio, medidas_orfas, medidas_impacto_lista, top_complexas_export)
             
             # Botões de exportação acima do grafo
@@ -685,27 +651,6 @@ if uploaded_file:
             st.markdown("---")
             st.subheader("📊 Análise Global do Modelo")
             
-            # Calcular dependentes globais (quantas vezes cada medida é usada)
-            # Se A depende de B, então B aparece como destino de A.
-            # Dependentes de X = Quantas vezes X aparece como destino.
-            global_dependentes_count = df[col_destino].value_counts().to_dict()
-            
-            todas_medidas_complexas = []
-            
-            # Iterar sobre TODAS as medidas do modelo (info_map)
-            for nome_medida, info in info_map.items():
-                if info.get("tipo") == "MEASURE":
-                    exp = info.get("exp", "")
-                    # Pegar número de dependentes globalmente
-                    n_dependentes = global_dependentes_count.get(nome_medida, 0)
-                    
-                    score, classificacao, _ = calcular_complexity_score(exp, nome_medida, n_dependentes)
-                    todas_medidas_complexas.append({
-                        'medida': nome_medida, 
-                        'score': score, 
-                        'classificacao': classificacao
-                    })
-            
             if todas_medidas_complexas:
                 # Ordenar por score decrescente
                 top_complexas_global = sorted(todas_medidas_complexas, key=lambda x: x['score'], reverse=True)
@@ -723,24 +668,21 @@ if uploaded_file:
                 lista_dependentes = []
                 for nome_medida in info_map:
                     if info_map[nome_medida].get("tipo") == "MEASURE":
-                        # Contar todos os objetos que dependem desta medida (descendentes no grafo global)
+                        # Contar todos os objetos que dependem desta medida (ancestrais no grafo global)
                         if nome_medida in G_global:
-                            descendentes = nx.descendants(G_global, nome_medida)
-                            total_objetos = len(descendentes)
-                            # Contar apenas medidas entre os descendentes
-                            total_medidas = sum(1 for d in descendentes if info_map.get(d, {}).get("tipo") == "MEASURE")
+                            predecessores = nx.ancestors(G_global, nome_medida)
+                            # Contar apenas medidas entre os predecessores
+                            total_medidas = sum(1 for p in predecessores if info_map.get(p, {}).get("tipo") == "MEASURE")
                         else:
-                            total_objetos = 0
                             total_medidas = 0
                         
                         lista_dependentes.append({
                             "Medida": nome_medida,
-                            "Total de Objetos Dependentes": total_objetos,
                             "Medidas Dependentes": total_medidas
                         })
 
                 df_dependentes = pd.DataFrame(lista_dependentes)
-                df_dependentes = df_dependentes.sort_values(by=["Total de Objetos Dependentes", "Medidas Dependentes"], ascending=False)
+                df_dependentes = df_dependentes.sort_values(by=["Medidas Dependentes"], ascending=False)
 
                 # Exibir as duas tabelas lado a lado
                 col_ranking, col_dependentes = st.columns(2)
@@ -764,6 +706,52 @@ if uploaded_file:
                         use_container_width=True,
                         height=400
                     )
+                    
+                    # ℹ️ TABELA DE REGRAS DE COMPLEXIDADE (Expansível)
+                    with st.expander("ℹ️ Entenda o Cálculo da Complexidade (Tabela de Regras)", expanded=False):
+                        st.markdown("""
+                        ### 📊 Como o Score é calculado?
+                        O score começa em **0** e acumula pontos de penalidade. Quanto menor, melhor.
+                        O KPI final é normalizado para **0-100**.
+                        
+                        #### 1️⃣ D1: Funções DAX (Peso Alto)
+                        | Função | Penalidade | Motivo |
+                        |---|---|---|
+                        | `SUMX`, `AVERAGEX`, `MINX`, `MAXX` | **+8** pts | Iterador (força Formula Engine) |
+                        | `RANKX` | **+12** pts | Custo computacional alto |
+                        | `FILTER` | **+10** pts | Iteração muitas vezes desnecessária |
+                        | `ADDCOLUMNS` | **+10** pts | Materialização temporária |
+                        | `SUMMARIZE`, `SUMMARIZECOLUMNS` | **+12** pts | Complexo para otimizar |
+                        | `GENERATE` | **+15** pts | Cross join custoso |
+                        | `EARLIER` | **+20** pts | Difícil leitura/manutenção |
+                        
+                        #### 2️⃣ D2: Contexto e CALCULATE
+                        | Regra | Penalidade |
+                        |---|---|
+                        | Cada `CALCULATE` | **+5** pts |
+                        | `CALCULATE` com múltiplos filtros | **+3** pts por filtro extra |
+                        | `ALL`, `ALLEXCEPT`, `REMOVEFILTERS` | **+6** pts |
+                        | `KEEPFILTERS` | **+3** pts |
+                        
+                        #### 3️⃣ D3: Estrutura do Código
+                        | Métrica | Pontos |
+                        |---|---|
+                        | Mais de 10 linhas | **+5** pts |
+                        | Mais de 20 linhas | **+10** pts |
+                        | Uso de Variáveis (`VAR`) | **-5** pts (BÔNUS 🟢) |
+                        | Comentários (`--` ou `//`) | **-2** pts (BÔNUS 🟢) |
+                        
+                        #### 4️⃣ D4: Dependências
+                        | Item | Penalidade |
+                        |---|---|
+                        | Por medida dependente | **+2** pts |
+                        
+                        #### 5️⃣ D5: Anti-patterns (Erros Comuns)
+                        | Anti-pattern | Penalidade |
+                        |---|---|
+                        | `FILTER(ALL(Tabela))` | **+20** pts (Muito ineficiente) |
+                        | Time Intelligence Manual | **+8** pts (Use funções nativas) |
+                        """)
                 
                 with col_dependentes:
                     st.markdown("##### 🔗 Medidas com Mais Dependentes")
@@ -771,8 +759,13 @@ if uploaded_file:
                         df_dependentes,
                         column_config={
                             "Medida": st.column_config.TextColumn("Medida", width="large"),
-                            "Total de Objetos Dependentes": st.column_config.NumberColumn("Total de Objetos Dependentes"),
-                            "Medidas Dependentes": st.column_config.NumberColumn("Medidas Dependentes"),
+                            "Medidas Dependentes": st.column_config.ProgressColumn(
+                                "Medidas Dependentes",
+                                help="Quantidade de medidas que dependem desta medida",
+                                format="%d",
+                                min_value=0,
+                                max_value=int(df_dependentes["Medidas Dependentes"].max()) if len(df_dependentes) > 0 else 100,
+                            ),
                         },
                         hide_index=True,
                         use_container_width=True,
