@@ -481,22 +481,22 @@ if uploaded_file:
             )
             
             # === CÁLCULO DE COMPLEXIDADE DAX ===
-            scores_complexidade = []
-            medidas_complexas = []  # Para relatório
-            
-            for node in G.nodes():
-                exp = info_map.get(node, {}).get("exp", "")
-                tipo = info_map.get(node, {}).get("tipo", "")
-                if exp and tipo == "MEASURE":
-                    # Contar dependentes (quantas medidas dependem desta)
-                    dependentes = len(list(G.predecessors(node)))
-                    score, classificacao, _ = calcular_complexity_score(exp, node, dependentes)
-                    scores_complexidade.append(score)
-                    medidas_complexas.append({'medida': node, 'score': score, 'classificacao': classificacao})
-            
+
+
+            # Calcular score de complexidade apenas das medidas selecionadas
+            medidas_selecionadas_complexas = []
+            for nome_medida in medidas_selecionadas:
+                info = info_map.get(nome_medida, {})
+                if info.get("tipo") == "MEASURE":
+                    exp = info.get("exp", "")
+                    n_dependentes = df[col_destino].value_counts().to_dict().get(nome_medida, 0)
+                    score, classificacao, _ = calcular_complexity_score(exp, nome_medida, n_dependentes)
+                    medidas_selecionadas_complexas.append({'medida': nome_medida, 'score': score, 'classificacao': classificacao})
+
+            scores_complexidade = [m['score'] for m in medidas_selecionadas_complexas]
             score_medio = round(sum(scores_complexidade) / len(scores_complexidade), 1) if scores_complexidade else 0
-            
-            # Classificação do modelo
+
+            # Classificação do modelo (das selecionadas)
             if score_medio <= 20:
                 class_modelo = "🟢 Simples"
             elif score_medio <= 40:
@@ -681,9 +681,9 @@ if uploaded_file:
             # Grafo em largura total
             html(full_html, height=650)
             
-            # 📊 RANKING DE COMPLEXIDADE GLOBAL (MODELO TODO)
+            # 📊 ANÁLISE GLOBAL DO MODELO
             st.markdown("---")
-            st.subheader("🏆 Ranking de Complexidade (Modelo Todo)")
+            st.subheader("📊 Análise Global do Modelo")
             
             # Calcular dependentes globais (quantas vezes cada medida é usada)
             # Se A depende de B, então B aparece como destino de A.
@@ -710,29 +710,74 @@ if uploaded_file:
                 # Ordenar por score decrescente
                 top_complexas_global = sorted(todas_medidas_complexas, key=lambda x: x['score'], reverse=True)
                 
-                # Criar DataFrame
+                # Criar DataFrame do ranking
                 df_rank_global = pd.DataFrame(top_complexas_global)
                 df_rank_global = df_rank_global[['medida', 'score', 'classificacao']]
                 df_rank_global.columns = ['Medida', 'Score', 'Classificação']
                 
-                # Mostrar tabela com paginação nativa (dataframe handling)
-                st.dataframe(
-                    df_rank_global,
-                    column_config={
-                        "Medida": st.column_config.TextColumn("Medida", width="large"),
-                        "Score": st.column_config.ProgressColumn(
-                            "Score de Complexidade",
-                            help="Score de 0 a 100",
-                            format="%d",
-                            min_value=0,
-                            max_value=100,
-                        ),
-                        "Classificação": st.column_config.TextColumn("Classificação", width="medium"),
-                    },
-                    hide_index=True,
-                    use_container_width=True,
-                    height=400  # Altura fixa para permitir scroll/paginação
-                )
+                # Calcular dependentes por medida usando GRAFO GLOBAL (todas as relações do modelo, não filtradas)
+                # Construir grafo global com todas as dependências do df_filtrado
+                G_global = nx.DiGraph()
+                G_global.add_edges_from([(row[col_destino], row[col_origem]) for _, row in df_filtrado.iterrows()])
+                
+                lista_dependentes = []
+                for nome_medida in info_map:
+                    if info_map[nome_medida].get("tipo") == "MEASURE":
+                        # Contar todos os objetos que dependem desta medida (descendentes no grafo global)
+                        if nome_medida in G_global:
+                            descendentes = nx.descendants(G_global, nome_medida)
+                            total_objetos = len(descendentes)
+                            # Contar apenas medidas entre os descendentes
+                            total_medidas = sum(1 for d in descendentes if info_map.get(d, {}).get("tipo") == "MEASURE")
+                        else:
+                            total_objetos = 0
+                            total_medidas = 0
+                        
+                        lista_dependentes.append({
+                            "Medida": nome_medida,
+                            "Total de Objetos Dependentes": total_objetos,
+                            "Medidas Dependentes": total_medidas
+                        })
+
+                df_dependentes = pd.DataFrame(lista_dependentes)
+                df_dependentes = df_dependentes.sort_values(by=["Total de Objetos Dependentes", "Medidas Dependentes"], ascending=False)
+
+                # Exibir as duas tabelas lado a lado
+                col_ranking, col_dependentes = st.columns(2)
+                
+                with col_ranking:
+                    st.markdown("##### 🏆 Ranking de Complexidade")
+                    st.dataframe(
+                        df_rank_global,
+                        column_config={
+                            "Medida": st.column_config.TextColumn("Medida", width="large"),
+                            "Score": st.column_config.ProgressColumn(
+                                "Score de Complexidade",
+                                help="Score de 0 a 100",
+                                format="%d",
+                                min_value=0,
+                                max_value=100,
+                            ),
+                            "Classificação": st.column_config.TextColumn("Classificação", width="medium"),
+                        },
+                        hide_index=True,
+                        use_container_width=True,
+                        height=400
+                    )
+                
+                with col_dependentes:
+                    st.markdown("##### 🔗 Medidas com Mais Dependentes")
+                    st.dataframe(
+                        df_dependentes,
+                        column_config={
+                            "Medida": st.column_config.TextColumn("Medida", width="large"),
+                            "Total de Objetos Dependentes": st.column_config.NumberColumn("Total de Objetos Dependentes"),
+                            "Medidas Dependentes": st.column_config.NumberColumn("Medidas Dependentes"),
+                        },
+                        hide_index=True,
+                        use_container_width=True,
+                        height=400
+                    )
             
             # 📊 ANÁLISE DE IMPACTO DETALHADA
             if medidas_selecionadas:
