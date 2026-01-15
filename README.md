@@ -440,7 +440,7 @@ Este projeto está sob a licença MIT. Veja o arquivo `LICENSE` para mais detalh
 **Gabriela Villagran**
 
 - GitHub: [@gabrielavillagran](https://github.com/gabrielavillagran)
-- LinkedIn: [Gabriela Villagran](https://www.linkedin.com/in/gabrielavillagran/)
+- LinkedIn: [Gabriela Villagran](https://www.linkedin.com/in/gabriela-villagran/)
 
 ---
 
