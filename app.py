@@ -56,7 +56,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Grafo de Dependências — Power BI")
+st.title("Grafo de Dependências — Power BI")
 
 # --- FUNÇÕES AUXILIARES ---
 def limpar_dax(texto):
@@ -384,7 +384,8 @@ if uploaded_file:
             tipos_selecionados = st.sidebar.multiselect("Filtrar Origens por Tipo:", options=tipos_disponiveis, default=[])
 
         df_filtrado = df[df[col_tipo_origem].isin(tipos_selecionados)]
-        todas_destinos = sorted([str(m) for m in df_filtrado[col_destino].unique()])
+        # Usar df completo para listar todas as medidas destino, independente do filtro de origem
+        todas_destinos = sorted([str(m) for m in df[col_destino].unique()])
         
         # 🔍 MELHORIA 1: BUSCA DE MEDIDAS
         st.sidebar.markdown("---")
@@ -416,7 +417,24 @@ if uploaded_file:
             help="⬇️ Dependências: mostra as colunas, tabelas e medidas que a raiz usa\n"
                  "⬆️ Dependentes: mostra quais outras medidas dependem da raiz"
         )
-
+        
+        # 🎯 MODO DE VISUALIZAÇÃO DO GRAFO
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("🎯 Modo de Visualização")
+        modo_visualizacao = st.sidebar.radio(
+            "Escolha o modo:",
+            options=[
+                "📊 Grafo Completo (todos os níveis)",
+                "🔍 Grafo Expansível (clique para expandir)"
+            ],
+            index=0,
+            help="📊 Completo: mostra todas as dependências de uma vez\n"
+                 "🔍 Expansível: mostra apenas o primeiro nível, clique em (+) para expandir cada nó"
+        )
+        
+        # Placeholder para botões de exportação (será preenchido depois)
+        export_placeholder = st.sidebar.container()
+        
         # Mapeamento de Info Limpo
         info_map = {}
         for _, row in df.iterrows():
@@ -427,30 +445,51 @@ if uploaded_file:
                 info_map[orig] = {"exp": limpar_dax(row[col_exp_origem]), "tipo": str(row[col_tipo_origem])}
 
         if medidas_selecionadas:
-            arestas, visitados, fila = [], set(), list(medidas_selecionadas)
-            
             # Determinar modo de navegação baseado na escolha do usuário
-            modo_dependencias = "⬇️" in direcao_grafo or "🔄" in direcao_grafo
-            modo_dependentes = "⬆️" in direcao_grafo or "🔄" in direcao_grafo
+            modo_dependencias = "⬇️" in direcao_grafo
+            modo_dependentes = "⬆️" in direcao_grafo
+            modo_expansivel = "🔍" in modo_visualizacao
             
-            while fila:
-                atual = fila.pop(0)
-                if atual not in visitados:
-                    visitados.add(atual)
+            if modo_expansivel:
+                # MODO EXPANSÍVEL: Construir apenas primeiro nível
+                arestas, visitados = [], set()
+                
+                for raiz in medidas_selecionadas:
+                    visitados.add(raiz)
                     
-                    # MODO 1: Dependências (do que depende) - direção original
                     if modo_dependencias:
-                        filhos = df_filtrado[df_filtrado[col_destino] == atual][col_origem].tolist()
+                        filhos = df_filtrado[df_filtrado[col_destino] == raiz][col_origem].tolist()
                         for filho in filhos:
-                            arestas.append((atual, filho))
-                            if filho not in visitados: fila.append(filho)
+                            arestas.append((raiz, filho))
+                            visitados.add(filho)
                     
-                    # MODO 2: Dependentes (quem depende) - direção reversa
                     if modo_dependentes:
-                        pais = df_filtrado[df_filtrado[col_origem] == atual][col_destino].tolist()
+                        pais = df_filtrado[df_filtrado[col_origem] == raiz][col_destino].tolist()
                         for pai in pais:
-                            arestas.append((pai, atual))
-                            if pai not in visitados: fila.append(pai)
+                            arestas.append((pai, raiz))
+                            visitados.add(pai)
+            else:
+                # MODO COMPLETO: BFS normal (todos os níveis)
+                arestas, visitados, fila = [], set(), list(medidas_selecionadas)
+                
+                while fila:
+                    atual = fila.pop(0)
+                    if atual not in visitados:
+                        visitados.add(atual)
+                        
+                        # MODO 1: Dependências (do que depende) - direção original
+                        if modo_dependencias:
+                            filhos = df_filtrado[df_filtrado[col_destino] == atual][col_origem].tolist()
+                            for filho in filhos:
+                                arestas.append((atual, filho))
+                                if filho not in visitados: fila.append(filho)
+                        
+                        # MODO 2: Dependentes (quem depende) - direção reversa
+                        if modo_dependentes:
+                            pais = df_filtrado[df_filtrado[col_origem] == atual][col_destino].tolist()
+                            for pai in pais:
+                                arestas.append((pai, atual))
+                                if pai not in visitados: fila.append(pai)
             
             G = nx.DiGraph()
             G.add_edges_from(arestas)
@@ -508,39 +547,101 @@ if uploaded_file:
             else:
                 class_modelo = "⚫ Crítica"
             
+            # Mostrar apenas o score para manter o card alinhado
             c5.metric(
                 "📊 Complexidade DAX",
                 f"{score_medio}/100",
-                delta=class_modelo,
-                help="Score de 0 a 100 baseado em 5 dimensões (Funções, Contexto, Estrutura, Dependências, Anti-patterns).\n\n👇 Abra a seção 'ℹ️ Entenda o Cálculo' abaixo da tabela de ranking para ver a tabela de regras completa."
+                help=f"Score de 0 a 100 baseado em 5 dimensões.\n\nClassificação: {class_modelo}\n\n Abra a seção 'ℹ️ Entenda o Cálculo' abaixo da tabela de ranking para ver a tabela de regras completa."
             )
 
             # --- 6. GERAÇÃO DO GRAFO COM ÍCONES (MELHORIA 27) ---
             # Ícones por tipo de objeto
-            cores = {"MEASURE": "#88B995", "COLUMN": "#5E9AE9", "TABLE": "#F4A460", "UNKNOWN": "#CCCCCC"}
-            icones = {"MEASURE": "📊", "COLUMN": "📋", "TABLE": "📁", "UNKNOWN": "❓"}
+            cores = {
+                "MEASURE": "#88B995", 
+                "COLUMN": "#5E9AE9", 
+                "CALC_COLUMN": "#BBBBBB",
+                "TABLE": "#F4A460", 
+                "CALC_TABLE": "#BBBBBB",
+                "UNKNOWN": "#CCCCCC"
+            }
+            icones = {
+                "MEASURE": "📊", 
+                "COLUMN": "📋", 
+                "CALC_COLUMN": "🔢",
+                "TABLE": "📁", 
+                "CALC_TABLE": "🧮",
+                "UNKNOWN": "❓"
+            }
             
             net = Network(height="600px", width="100%", directed=True, bgcolor="#ffffff")
+            
+            # Criar mapa de nós expansíveis (que têm filhos não mostrados)
+            nos_expansiveis = set()
+            if modo_expansivel:
+                nos_no_grafo = set(G.nodes())
+                for node in G.nodes():
+                    # Verificar se este nó tem filhos que não estão no grafo atual
+                    if modo_dependencias:
+                        todos_filhos = set(df_filtrado[df_filtrado[col_destino] == node][col_origem].tolist())
+                    elif modo_dependentes:
+                        todos_filhos = set(df_filtrado[df_filtrado[col_origem] == node][col_destino].tolist())
+                    else:
+                        todos_filhos = set()
+                    
+                    # Se tem filhos que NÃO estão no grafo, é expansível
+                    filhos_faltantes = todos_filhos - nos_no_grafo
+                    if len(filhos_faltantes) > 0:
+                        nos_expansiveis.add(node)
+            
             for node in G.nodes():
                 tipo = info_map.get(node, {}).get("tipo", "UNKNOWN")
                 icone = icones.get(tipo, icones["UNKNOWN"])
-                # Label com ícone
-                label_com_icone = f"{icone} {node}"
+                
+                # Adicionar botão de expansão visual usando caractere especial destacado
+                if modo_expansivel and node in nos_expansiveis:
+                    # Usar símbolo ⊕ (circled plus) que é bem visível
+                    label_com_icone = f"{icone} {node} ⊕"
+                    title_text = f"Clique para ver o DAX\nTipo: {tipo}\n\n⚡ DUPLO CLIQUE PARA EXPANDIR\n🔄 Expandido: duplo clique para colapsar"
+                else:
+                    label_com_icone = f"{icone} {node}"
+                    title_text = f"Clique para ver o DAX\nTipo: {tipo}"
+                
+                # Configurar fonte diferente para nós expansíveis
+                if modo_expansivel and node in nos_expansiveis:
+                    node_font = {"face": "Segoe UI", "size": 14, "color": "#2E7D32", "bold": True}
+                else:
+                    node_font = {"face": "Segoe UI", "size": 14}
+                
                 net.add_node(
                     node, 
                     label=label_com_icone, 
-                    title=f"Clique para ver o DAX\nTipo: {tipo}", 
+                    title=title_text,
                     color=cores.get(tipo, cores["UNKNOWN"]), 
                     shape="box", 
-                    margin=10, 
-                    font={"face": "Segoe UI", "size": 14}
+                    margin={"top": 10, "right": 15, "bottom": 10, "left": 15},
+                    font=node_font,
+                    borderWidth=3 if (modo_expansivel and node in nos_expansiveis) else 1,
+                    borderWidthSelected=4,
+                    widthConstraint={"minimum": 100, "maximum": 300}
                 )
             for u, v in G.edges():
                 net.add_edge(u, v, color="#CCCCCC", width=1)
 
             net.set_options(json.dumps({
                 "nodes": {"shadow": True},
-                "layout": {"hierarchical": {"enabled": True, "direction": "UD", "sortMethod": "directed", "levelSeparation": 150, "nodeSpacing": 200}},
+                "layout": {
+                    "hierarchical": {
+                        "enabled": True, 
+                        "direction": "UD", 
+                        "sortMethod": "directed", 
+                        "levelSeparation": 200,
+                        "nodeSpacing": 300,
+                        "treeSpacing": 300,
+                        "blockShifting": True,
+                        "edgeMinimization": True,
+                        "parentCentralization": True
+                    }
+                },
                 "physics": {"enabled": False},
                 "interaction": {"hover": True}
             }))
@@ -551,6 +652,32 @@ if uploaded_file:
                 html_content = f.read()
 
             info_json = json.dumps(info_map)
+            
+            # Criar mapa completo de dependências para expansão dinâmica
+            # Incluir TODOS os objetos que aparecem no DataFrame, não só os do info_map
+            deps_map = {}
+            todos_objetos = set(df_filtrado[col_destino].unique()) | set(df_filtrado[col_origem].unique())
+            
+            for node in todos_objetos:
+                if modo_dependencias:
+                    filhos = df_filtrado[df_filtrado[col_destino] == node][col_origem].tolist()
+                    deps_map[str(node)] = {'filhos': [str(f) for f in filhos], 'tipos': []}
+                    for filho in filhos:
+                        tipo_filho = info_map.get(str(filho), {}).get("tipo", "UNKNOWN")
+                        deps_map[str(node)]['tipos'].append(tipo_filho)
+                elif modo_dependentes:
+                    pais = df_filtrado[df_filtrado[col_origem] == node][col_destino].tolist()
+                    deps_map[str(node)] = {'filhos': [str(p) for p in pais], 'tipos': []}
+                    for pai in pais:
+                        tipo_pai = info_map.get(str(pai), {}).get("tipo", "UNKNOWN")
+                        deps_map[str(node)]['tipos'].append(tipo_pai)
+            
+            deps_json = json.dumps(deps_map)
+            cores_json = json.dumps(cores)
+            icones_json = json.dumps(icones)
+            modo_expansivel_js = "true" if modo_expansivel else "false"
+            modo_dependencias_js = "true" if modo_dependencias else "false"
+            
             custom_js = f"""
             <div id="dax-panel" style="position:fixed; top:20px; right:20px; width:450px; max-height:80vh; background:#ffffff; color:#31333f; border-radius:12px; padding:20px; overflow-y:auto; z-index:99999; display:none; box-shadow: 0 4px 16px rgba(0,0,0,0.15); font-family: 'Source Sans Pro', sans-serif; border: 1px solid #e6e9ef;">
                 <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px; border-bottom: 1px solid #e6e9ef; padding-bottom:10px;">
@@ -564,6 +691,15 @@ if uploaded_file:
             </div>
             <script>
                 var infoData = {info_json};
+                var depsMap = {deps_json};
+                var coresMap = {cores_json};
+                var iconesMap = {icones_json};
+                var modoExpansivel = {modo_expansivel_js};
+                var modoDependencias = {modo_dependencias_js};
+                // Mapa para rastrear quais filhos foram adicionados por cada nó pai
+                var nosExpandidosFilhos = {{}}; // {{nodeId: [filho1, filho2, ...]}}
+                
+                // Clique simples: mostrar DAX
                 network.on("click", function (params) {{
                     if (params.nodes.length > 0) {{
                         var id = params.nodes[0];
@@ -574,6 +710,190 @@ if uploaded_file:
                         document.getElementById('dax-panel').style.display = 'block';
                     }}
                 }});
+                
+                // Duplo clique: expandir/colapsar nó (apenas no modo expansível)
+                network.on("doubleClick", function (params) {{
+                    if (!modoExpansivel) return;
+                    
+                    if (params.nodes.length > 0) {{
+                        var nodeId = params.nodes[0];
+                        var nodeData = network.body.nodes[nodeId];
+                        
+                        if (!nodeData) return;
+                        
+                        var currentLabel = nodeData.options.label;
+                        
+                        // Verificar se está expandido (⊖) ou colapsado (⊕)
+                        if (currentLabel.indexOf('⊖') !== -1) {{
+                            // Nó está expandido, COLAPSAR
+                            console.log('Colapsando nó: ' + nodeId);
+                            colapsarNo(nodeId);
+                        }} else if (currentLabel.indexOf('⊕') !== -1) {{
+                            // Nó está colapsado, EXPANDIR
+                            console.log('Expandindo nó: ' + nodeId);
+                            expandirNo(nodeId);
+                        }} else {{
+                            console.log('Nó ' + nodeId + ' não tem botão de expansão');
+                        }}
+                    }}
+                }});
+                
+                // Função para expandir um nó
+                function expandirNo(nodeId) {{
+                    // Buscar filhos deste nó
+                    var deps = depsMap[nodeId];
+                    if (!deps || !deps.filhos || deps.filhos.length === 0) {{
+                        console.log('Nó ' + nodeId + ' não tem dependências');
+                        return;
+                    }}
+                    
+                    // Adicionar novos nós e arestas
+                    var newNodes = [];
+                    var newEdges = [];
+                    var nodosExistentes = network.body.data.nodes.get().map(function(n) {{ return n.id; }});
+                    var filhosAdicionados = [];
+                    
+                    console.log('Expandindo nó: ' + nodeId + ' com ' + deps.filhos.length + ' filhos');
+                    
+                    for (var i = 0; i < deps.filhos.length; i++) {{
+                        var filho = deps.filhos[i];
+                        var tipoFilho = deps.tipos[i];
+                        
+                        // Verificar se o nó já existe
+                        var nodeJaExiste = nodosExistentes.indexOf(filho) !== -1;
+                        
+                        if (!nodeJaExiste) {{
+                            // Nó não existe, adicionar
+                            var icone = iconesMap[tipoFilho] || iconesMap['UNKNOWN'];
+                            var cor = coresMap[tipoFilho] || coresMap['UNKNOWN'];
+                            
+                            // Verificar se este filho também tem filhos não mostrados
+                            var temFilhos = depsMap[filho] && depsMap[filho].filhos && depsMap[filho].filhos.length > 0;
+                            var label = icone + ' ' + filho + (temFilhos ? ' ⊕' : '');
+                            
+                            newNodes.push({{
+                                id: filho,
+                                label: label,
+                                title: 'Clique para ver o DAX\\nTipo: ' + tipoFilho + (temFilhos ? '\\n\\n⚡ DUPLO CLIQUE PARA EXPANDIR' : ''),
+                                color: cor,
+                                shape: 'box',
+                                margin: {{top: 10, right: 15, bottom: 10, left: 15}},
+                                font: temFilhos ? {{face: 'Segoe UI', size: 14, color: '#2E7D32', bold: true}} : {{face: 'Segoe UI', size: 14}},
+                                borderWidth: temFilhos ? 3 : 1,
+                                borderWidthSelected: 4,
+                                widthConstraint: {{minimum: 100, maximum: 300}}
+                            }});
+                            
+                            filhosAdicionados.push(filho);
+                            console.log('Adicionando nó: ' + filho);
+                        }}
+                        
+                        // Adicionar aresta (sempre, mesmo se o nó já existe)
+                        if (modoDependencias) {{
+                            newEdges.push({{from: nodeId, to: filho, color: '#CCCCCC', width: 1}});
+                        }} else {{
+                            newEdges.push({{from: filho, to: nodeId, color: '#CCCCCC', width: 1}});
+                        }}
+                    }}
+                    
+                    // Armazenar filhos adicionados
+                    nosExpandidosFilhos[nodeId] = deps.filhos;
+                    
+                    // Atualizar label e estilo do nó pai (trocar ⊕ por ⊖)
+                    var nodeData = network.body.nodes[nodeId];
+                    if (nodeData) {{
+                        var currentLabel = nodeData.options.label;
+                        var newLabel = currentLabel.replace(' ⊕', ' ⊖');
+                        network.body.data.nodes.update({{
+                            id: nodeId, 
+                            label: newLabel, 
+                            title: 'Clique para ver o DAX\\nTipo: ' + infoData[nodeId].tipo + '\\n\\n⚡ DUPLO CLIQUE PARA COLAPSAR',
+                            font: {{face: 'Segoe UI', size: 14, color: '#D32F2F', bold: true}},
+                            borderWidth: 3
+                        }});
+                    }}
+                    
+                    // Adicionar ao grafo
+                    if (newNodes.length > 0) {{
+                        network.body.data.nodes.add(newNodes);
+                    }}
+                    if (newEdges.length > 0) {{
+                        network.body.data.edges.add(newEdges);
+                    }}
+                }}
+                
+                // Função para colapsar um nó
+                function colapsarNo(nodeId) {{
+                    if (!nosExpandidosFilhos[nodeId]) {{
+                        console.log('Nó ' + nodeId + ' não tem filhos para remover');
+                        return;
+                    }}
+                    
+                    var filhos = nosExpandidosFilhos[nodeId];
+                    var nodosParaRemover = [];
+                    var arestasParaRemover = [];
+                    
+                    // Coletar nós e arestas para remover
+                    for (var i = 0; i < filhos.length; i++) {{
+                        var filho = filhos[i];
+                        
+                        // Verificar se o filho não é usado por outro nó
+                        var arestasDoFilho = network.body.data.edges.get({{
+                            filter: function(edge) {{
+                                return (modoDependencias && edge.to === filho) || (!modoDependencias && edge.from === filho);
+                            }}
+                        }});
+                        
+                        // Se o filho só tem uma aresta (a do pai atual), pode remover
+                        if (arestasDoFilho.length === 1) {{
+                            nodosParaRemover.push(filho);
+                            
+                            // Se o filho estava expandido, colapsar recursivamente
+                            if (nosExpandidosFilhos[filho]) {{
+                                colapsarNo(filho);
+                            }}
+                        }}
+                        
+                        // Remover aresta entre pai e filho
+                        var arestaId = network.body.data.edges.get({{
+                            filter: function(edge) {{
+                                return (modoDependencias && edge.from === nodeId && edge.to === filho) ||
+                                       (!modoDependencias && edge.from === filho && edge.to === nodeId);
+                            }}
+                        }});
+                        
+                        if (arestaId.length > 0) {{
+                            arestasParaRemover.push(arestaId[0].id);
+                        }}
+                    }}
+                    
+                    // Remover nós e arestas
+                    if (nodosParaRemover.length > 0) {{
+                        network.body.data.nodes.remove(nodosParaRemover);
+                    }}
+                    if (arestasParaRemover.length > 0) {{
+                        network.body.data.edges.remove(arestasParaRemover);
+                    }}
+                    
+                    // Atualizar label do nó pai (trocar ⊖ por ⊕)
+                    var nodeData = network.body.nodes[nodeId];
+                    if (nodeData) {{
+                        var currentLabel = nodeData.options.label;
+                        var newLabel = currentLabel.replace(' ⊖', ' ⊕');
+                        network.body.data.nodes.update({{
+                            id: nodeId, 
+                            label: newLabel, 
+                            title: 'Clique para ver o DAX\\nTipo: ' + infoData[nodeId].tipo + '\\n\\n⚡ DUPLO CLIQUE PARA EXPANDIR',
+                            font: {{face: 'Segoe UI', size: 14, color: '#2E7D32', bold: true}},
+                            borderWidth: 3
+                        }});
+                    }}
+                    
+                    // Remover do registro de expandidos
+                    delete nosExpandidosFilhos[nodeId];
+                    
+                    console.log('Nó ' + nodeId + ' colapsado. Removidos ' + nodosParaRemover.length + ' nós');
+                }}
             </script>
             """
             full_html = html_content.replace("</body>", f"{custom_js}</body>")
@@ -613,43 +933,44 @@ if uploaded_file:
             top_complexas_export = sorted(todas_medidas_complexas, key=lambda x: x['score'], reverse=True) if todas_medidas_complexas else []
             relatorio_txt = gerar_relatorio_texto(metricas_relatorio, medidas_orfas, medidas_impacto_lista, top_complexas_export)
             
-            # Botões de exportação acima do grafo
-            col_export1, col_export2, col_spacer = st.columns([1, 1, 6])
-            
-            with col_export1:
-                st.download_button(
-                    label="📸 Exportar HTML",
+            # Adicionar botões de exportação na sidebar
+            with export_placeholder:
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("📥 Exportar")
+                st.sidebar.download_button(
+                    label="📸 Grafo HTML",
                     data=full_html,
                     file_name="grafo_dependencias.html",
                     mime="text/html",
-                    help="Baixe o grafo como arquivo HTML interativo",
-                    use_container_width=True
+                    help="Grafo interativo",
+                    use_container_width=True,
+                    type="primary"
                 )
-            
-            with col_export2:
-                st.download_button(
-                    label="📄 Exportar Relatório",
+                st.sidebar.download_button(
+                    label="📄 Relatório TXT",
                     data=relatorio_txt,
                     file_name="relatorio_dependencias.txt",
                     mime="text/plain",
-                    help="Baixe relatório completo em formato texto",
+                    help="Relatório completo",
                     use_container_width=True
                 )
             
+            st.markdown("---")
+            
             # Legenda acima do grafo
+            st.subheader("Visualização do Grafo")
             legenda_html = '<div style="display:flex;align-items:center;gap:20px;padding:12px 0;font-size:14px;"><span style="font-weight:600;margin-right:10px;">Legenda:</span>'
             for k, v in cores.items():
-                icone = icones.get(k, "")
-                legenda_html += f'<div style="display:inline-flex;align-items:center;gap:6px;"><div style="width:12px;height:12px;background:{v};border-radius:2px;"></div><span>{icone} {k}</span></div>'
+                legenda_html += f'<div style="display:inline-flex;align-items:center;gap:6px;"><div style="width:12px;height:12px;background:{v};border-radius:2px;"></div><span>{k}</span></div>'
             legenda_html += '</div>'
             st.markdown(legenda_html, unsafe_allow_html=True)
             
             # Grafo em largura total
             html(full_html, height=650)
             
-            # 📊 ANÁLISE GLOBAL DO MODELO
+            # ANÁLISE GLOBAL DO MODELO
             st.markdown("---")
-            st.subheader("📊 Análise Global do Modelo")
+            st.subheader("Análise Global do Modelo")
             
             if todas_medidas_complexas:
                 # Ordenar por score decrescente
@@ -775,7 +1096,7 @@ if uploaded_file:
             # 📊 ANÁLISE DE IMPACTO DETALHADA
             if medidas_selecionadas:
                 st.markdown("---")
-                st.subheader("📊 Análise de Impacto por Medida")
+                st.subheader("Análise de Impacto por Medida")
                 
                 cols_impacto = st.columns(min(3, len(medidas_selecionadas)))
                 for idx, medida in enumerate(medidas_selecionadas):
