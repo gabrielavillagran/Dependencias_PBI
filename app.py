@@ -725,7 +725,7 @@ with st.expander("📖 Como usar este analisador?", expanded=False):
     - **Rápido**: Upload e análise em poucos segundos
     """)
     
-    st.info("💡 **Dica**: O arquivo ZIP deve ter no máximo 200MB. Projetos maiores podem demorar mais para processar.")
+    st.warning("⚠️ **Importante**: O arquivo ZIP deve ter no máximo 200MB. Se o seu projeto ultrapassar esse limite, remova o arquivo `cache.abf` conforme instruções acima.")
 
 # --- 2. CARREGAMENTO DO ZIP ---
 uploaded_file = st.file_uploader(
