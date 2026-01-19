@@ -1291,18 +1291,6 @@ if uploaded_file:
             st.markdown("---")
             st.markdown("##### 🧹 Sugestão de Descarte Seguro")
             
-            # DEBUG: Verificar se medida específica está mapeada
-            with st.expander("🔍 Debug: Verificar medida específica"):
-                medida_teste = st.text_input("Nome da medida para verificar:")
-                if medida_teste:
-                    st.write(f"**Medida existe no modelo?** {medida_teste in st.session_state.get('todas_medidas_modelo', set())}")
-                    st.write(f"**Aparece em Destino (usada por outras)?** {medida_teste in set(df[col_destino].unique())}")
-                    st.write(f"**Aparece em visuais?** {medida_teste in medidas_em_visuais_global}")
-                    # Buscar quem usa essa medida
-                    quem_usa = df[df[col_destino] == medida_teste][col_origem].tolist()
-                    if quem_usa:
-                        st.write(f"**Usada por:** {', '.join(quem_usa)}")
-            
             # Usar o cálculo global já feito (não recalcular)
             lista_descarte = sorted(list(candidatas_descarte_global))
             
