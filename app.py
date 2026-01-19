@@ -332,8 +332,12 @@ def calcular_complexity_score(expressao, nome_medida="", medidas_dependentes=0):
     # === D3: ESTRUTURA ===
     linhas = expressao.count('\n') + 1
     if linhas > 20:
-        score += 10
-        detalhes.append(f"D3: >20 linhas ({linhas}) = +10")
+        # +10 para passar de 20, +5 a cada 20 linhas adicionais
+        linhas_extras = linhas - 20
+        blocos_extras = linhas_extras // 20
+        penalty = 10 + (blocos_extras * 5)
+        score += penalty
+        detalhes.append(f"D3: >20 linhas ({linhas}) = +{penalty}")
     elif linhas > 10:
         score += 5
         detalhes.append(f"D3: >10 linhas ({linhas}) = +5")
@@ -354,7 +358,7 @@ def calcular_complexity_score(expressao, nome_medida="", medidas_dependentes=0):
     
     # === D4: DEPENDÊNCIAS ===
     if medidas_dependentes > 0:
-        penalty = medidas_dependentes * 2
+        penalty = medidas_dependentes * 4
         score += penalty
         detalhes.append(f"D4: {medidas_dependentes} dependentes = +{penalty}")
     
@@ -702,16 +706,18 @@ with st.expander("📖 Como usar este analisador?", expanded=False):
     st.markdown("""
     ### Passo a Passo:
     1. Localize a pasta do seu **Power BI Project** (formato `.pbip`) no seu computador
-    2. **Compacte a pasta principal** em um arquivo ZIP:
-       - Clique com o botão direito na pasta do projeto
-       - Selecione "Enviar para > Pasta compactada"
-       - Ou use 7-Zip/WinRAR se preferir
-    3. **Faça o upload do arquivo ZIP** abaixo
-    4. O aplicativo irá automaticamente:
-       - ✅ Extrair os arquivos TMDL (Modelo Semântico)
-       - ✅ Analisar a estrutura de Páginas e Visuais (Relatório)
-       - ✅ Analisar todas as medidas e suas dependências
-       - ✅ Gerar o grafo de dependências interativo
+    2. **Antes de compactar**, faça uma cópia da pasta do seu projeto PBIP para não perder dados importantes.
+    3. Na cópia, acesse a subpasta `.SemanticModel` e **remova o arquivo `cache.abf`** (ele pode deixar o ZIP muito grande e impedir o upload).
+    4. **Compacte a pasta copiada** em um arquivo ZIP:
+        - Clique com o botão direito na pasta copiada
+        - Selecione "Enviar para > Pasta compactada"
+        - Ou use 7-Zip/WinRAR se preferir
+    5. **Faça o upload do arquivo ZIP** abaixo
+    6. O aplicativo irá automaticamente:
+        - ✅ Extrair os arquivos TMDL (Modelo Semântico)
+        - ✅ Analisar a estrutura de Páginas e Visuais (Relatório)
+        - ✅ Analisar todas as medidas e suas dependências
+        - ✅ Gerar o grafo de dependências interativo
     
     ### ⚡ Vantagens:
     - **Sem necessidade de DAX Query**: Não precisa mais extrair dependências manualmente do Power BI!
@@ -794,7 +800,11 @@ if uploaded_file:
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
                 with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
-                    zip_ref.extractall(temp_dir)
+                    for member in zip_ref.namelist():
+                        # Ignora qualquer arquivo chamado cache.abf em qualquer subpasta
+                        if member.lower().endswith('cache.abf'):
+                            continue
+                        zip_ref.extract(member, temp_dir)
                 
                 # 1. Procurar Modelo Semântico (TMDL)
                 tmdl_folder = None
@@ -1037,7 +1047,7 @@ if uploaded_file:
             )
             
             score_geral = round(sum(m['score'] for m in todas_medidas_complexas) / len(todas_medidas_complexas), 1) if todas_medidas_complexas else 0
-            m4.metric("Complexidade Média", f"{score_geral}/100", help="Média do Score D1-D5 de todas as medidas. Quanto menor, mais performático e legível é o seu modelo.")
+            m4.metric("Complexidade DAX Média", f"{score_geral}/100", help="Média do Score D1-D5 de todas as medidas DAX. Quanto menor, mais performático e legível é o seu modelo.")
             
             st.markdown("---")
 
@@ -1048,16 +1058,16 @@ if uploaded_file:
             
             # Classificar criticidade geral baseada no score médio
             if score_geral >= 60:
-                criticidade = "🔴 **Alta**"
+                criticidade = "🔴 Alta"
                 msg_criticidade = "seu modelo apresenta alta complexidade nas medidas DAX"
             elif score_geral >= 40:
-                criticidade = "🟠 **Moderada**"
+                criticidade = "🟠 Moderada"
                 msg_criticidade = "seu modelo apresenta complexidade moderada nas medidas DAX"
             elif score_geral >= 20:
-                criticidade = "🟡 **Baixa**"
+                criticidade = "🟡 Baixa"
                 msg_criticidade = "seu modelo apresenta baixa complexidade nas medidas DAX"
             else:
-                criticidade = "🟢 **Muito Baixa**"
+                criticidade = "🟢 Muito Baixa"
                 msg_criticidade = "seu modelo apresenta medidas DAX simples e bem otimizadas"
             
             # Usar markdown com tamanho de fonte consistente
@@ -1070,7 +1080,7 @@ if uploaded_file:
 <ul style="margin-top: 0.5rem; margin-bottom: 0.5rem;">
 <li>📄 <strong>{total_paginas}</strong> páginas identificadas no relatório</li>
 <li>📐 <strong>{total_medidas}</strong> medidas DAX mapeadas</li>
-<li>🎯 <strong>Criticidade Média:</strong> {criticidade} (Score: {score_geral}/100)</li>
+<li>🎯 <strong>Criticidade DAX Média:</strong> {criticidade} (Score: {score_geral}/100)</li>
 </ul>
 
 <em>{msg_criticidade.capitalize()}</em>. Use este relatório para auxiliar nas análises de <strong>governança</strong>, <strong>otimização de performance</strong> e <strong>manutenção</strong> do seu modelo Power BI.
@@ -1215,9 +1225,9 @@ if uploaded_file:
                 with c3:
                     st.markdown("**D3/D4/D5: Estrutura & Boas Práticas**")
                     st.dataframe(pd.DataFrame([
-                        {"Item": "D3: > 20 Linhas", "Pts": "+10"},
+                        {"Item": "D3: > 20 Linhas", "Pts": "+10, +5 a cada 20 linhas"},
                         {"Item": "D3: Uso de VAR", "Pts": "-5 (Bônus)"},
-                        {"Item": "D4: Dependências", "Pts": "+2 por dep."},
+                        {"Item": "D4: Dependências", "Pts": "+4 por dep."},
                         {"Item": "D5: FILTER(ALL...)", "Pts": "+20 (Crítico)"},
                         {"Item": "D5: Data Manual", "Pts": "+8"},
                     ]), hide_index=True, use_container_width=True)
