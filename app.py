@@ -199,8 +199,21 @@ def parse_tmdl_file_cached(filepath_str):
 def find_measure_references_fast(expression, all_measure_names_set):
     """
     Find measure references (OPTIMIZED with set lookups).
+    Ignora referências em comentários (// ou --).
     """
-    matches = _BRACKET_PATTERN.findall(expression)
+    # Remover comentários antes de buscar referências
+    lines = expression.split('\n')
+    clean_lines = []
+    for line in lines:
+        # Remover comentários // e --
+        if '//' in line:
+            line = line.split('//')[0]
+        if '--' in line:
+            line = line.split('--')[0]
+        clean_lines.append(line)
+    
+    clean_expression = '\n'.join(clean_lines)
+    matches = _BRACKET_PATTERN.findall(clean_expression)
     return [m.strip() for m in matches if m.strip() in all_measure_names_set]
 
 def find_column_references(expression):
