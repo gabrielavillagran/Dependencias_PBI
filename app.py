@@ -892,35 +892,21 @@ if uploaded_file:
         st.sidebar.markdown("---")
 
         # --- 3. CÁLCULOS GLOBAIS (Pre-processamento) ---
-        # Mapeamento de Info Limpo (Global)
-        info_map = {}
-        for _, row in df.iterrows():
-            dest = str(row[col_destino])
-            orig = str(row[col_origem])
-            info_map[dest] = {"exp": limpar_dax(row[col_exp_destino]), "tipo": "MEASURE"}
-            if orig not in info_map or not info_map[orig]["exp"]:
-                info_map[orig] = {"exp": limpar_dax(row[col_exp_origem]), "tipo": str(row[col_tipo_origem])}
+        # Cache de mapeamento de info (leve, pode rodar sempre)
+        cache_info_key = 'info_map_cache'
+        if cache_info_key not in st.session_state:
+            info_map = {}
+            for _, row in df.iterrows():
+                dest = str(row[col_destino])
+                orig = str(row[col_origem])
+                info_map[dest] = {"exp": limpar_dax(row[col_exp_destino]), "tipo": "MEASURE"}
+                if orig not in info_map or not info_map[orig]["exp"]:
+                    info_map[orig] = {"exp": limpar_dax(row[col_exp_origem]), "tipo": str(row[col_tipo_origem])}
+            st.session_state[cache_info_key] = info_map
+        else:
+            info_map = st.session_state[cache_info_key]
 
-        # Calcular toda complexidade (Global)
-        global_dependentes_count = df[col_destino].value_counts().to_dict()
-        todas_medidas_complexas = []
-        for nome_medida, info in info_map.items():
-            if info.get("tipo") == "MEASURE":
-                exp = info.get("exp", "")
-                n_dependentes = global_dependentes_count.get(nome_medida, 0)
-                score, classificacao, _ = calcular_complexity_score(exp, nome_medida, n_dependentes)
-                todas_medidas_complexas.append({
-                    'medida': nome_medida, 
-                    'score': score, 
-                    'classificacao': classificacao
-                })
-
-        # Detectar medidas órfãs globais
-        origens_unicas_global = set(df[col_origem].unique())
-        destinos_unicos_global = set(df[col_destino].unique())
-        medidas_orfas_global = destinos_unicos_global - origens_unicas_global
-
-        # --- CÁLCULOS GLOBAIS (Pre-processamento) ---
+        # --- CÁLCULOS PESADOS - SOMENTE PARA ANÁLISE GLOBAL (Cachear!) ---
         if menu == "Análise por Medida":
             st.sidebar.header("Filtros da Análise")
             tipos_disponiveis = sorted(df[col_tipo_origem].unique().astype(str).tolist())
@@ -976,6 +962,29 @@ if uploaded_file:
 
         # === 4. ANÁLISE GLOBAL ===
         if menu == "Análise Global":
+            # --- CALCULAR COMPLEXIDADE E DEPENDÊNCIAS (CACHE) ---
+            cache_complexity_key = 'complexity_cache'
+            if cache_complexity_key not in st.session_state:
+                global_dependentes_count = df[col_destino].value_counts().to_dict()
+                todas_medidas_complexas = []
+                for nome_medida, info in info_map.items():
+                    if info.get("tipo") == "MEASURE":
+                        exp = info.get("exp", "")
+                        n_dependentes = global_dependentes_count.get(nome_medida, 0)
+                        score, classificacao, _ = calcular_complexity_score(exp, nome_medida, n_dependentes)
+                        todas_medidas_complexas.append({
+                            'medida': nome_medida, 
+                            'score': score, 
+                            'classificacao': classificacao
+                        })
+                st.session_state[cache_complexity_key] = {
+                    'global_dependentes_count': global_dependentes_count,
+                    'todas_medidas_complexas': todas_medidas_complexas
+                }
+            
+            global_dependentes_count = st.session_state[cache_complexity_key]['global_dependentes_count']
+            todas_medidas_complexas = st.session_state[cache_complexity_key]['todas_medidas_complexas']
+            
             # Métricas Gerais em Cards
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Objetos no Modelo", len(info_map), help="Total de Tabelas, Colunas e Medidas encontradas nos arquivos TMDL do projeto.")
@@ -1261,6 +1270,16 @@ if uploaded_file:
                         {"Item": "D5: FILTER(ALL...)", "Pts": "+20 (Crítico)"},
                         {"Item": "D5: Data Manual", "Pts": "+8"},
                     ]), hide_index=True, use_container_width=True)
+                
+                st.markdown("---")
+                st.markdown("**📊 Classificação de Criticidade por Score**")
+                st.dataframe(pd.DataFrame([
+                    {"Score": "0 - 20", "Classificação": "🟢 Muito Baixa", "Descrição": "Medida simples e otimizada"},
+                    {"Score": "21 - 40", "Classificação": "🟡 Baixa", "Descrição": "Medida com complexidade aceitável"},
+                    {"Score": "41 - 60", "Classificação": "🟠 Moderada", "Descrição": "Requer atenção e revisão"},
+                    {"Score": "61 - 80", "Classificação": "🔴 Alta", "Descrição": "Complexidade elevada - revisar urgente"},
+                    {"Score": "81 - 100", "Classificação": "🔴 Crítica", "Descrição": "Extremamente complexa - refatorar prioritário"},
+                ]), hide_index=True, use_container_width=True)
             st.markdown("---")
             st.markdown("##### Mais Dependentes")
             G_gl = nx.DiGraph()
@@ -1360,6 +1379,28 @@ if uploaded_file:
 
         # === 5. ANÁLISE POR MEDIDA ===
         elif menu == "Análise por Medida":
+            # --- CALCULAR COMPLEXIDADE APENAS SE NECESSÁRIO (para métricas) ---
+            cache_complexity_key = 'complexity_cache'
+            if cache_complexity_key not in st.session_state:
+                global_dependentes_count = df[col_destino].value_counts().to_dict()
+                todas_medidas_complexas = []
+                for nome_medida, info in info_map.items():
+                    if info.get("tipo") == "MEASURE":
+                        exp = info.get("exp", "")
+                        n_dependentes = global_dependentes_count.get(nome_medida, 0)
+                        score, classificacao, _ = calcular_complexity_score(exp, nome_medida, n_dependentes)
+                        todas_medidas_complexas.append({
+                            'medida': nome_medida, 
+                            'score': score, 
+                            'classificacao': classificacao
+                        })
+                st.session_state[cache_complexity_key] = {
+                    'global_dependentes_count': global_dependentes_count,
+                    'todas_medidas_complexas': todas_medidas_complexas
+                }
+            
+            todas_medidas_complexas = st.session_state[cache_complexity_key]['todas_medidas_complexas']
+            
             if not medidas_selecionadas:
                 st.info("👈 Selecione uma ou mais Medidas na barra lateral para detalhar dependências e impacto.")
             else:
@@ -1452,54 +1493,140 @@ if uploaded_file:
                     targets = df_filtrado[df_filtrado[col_destino if modo_dependencias else col_origem] == n_id][col_origem if modo_dependencias else col_destino].tolist()
                     d_js[str(n_id)] = {'filhos': [str(x) for x in targets], 'tipos': [info_map.get(str(x), {}).get("tipo", "UNKNOWN") for x in targets]}
 
-                script_js = f"""
-                <div id="dax-panel" style="position:fixed; top:20px; right:20px; width:450px; max-height:80vh; background:#ffffff; border-radius:12px; padding:20px; overflow-y:auto; z-index:99999; display:none; box-shadow:0 4px 16px rgba(0,0,0,0.15); border:1px solid #e6e9ef; font-family: sans-serif;">
-                    <button onclick="this.parentElement.style.display='none'" style="float:right; cursor:pointer;">&times;</button>
-                    <div id="p-title" style="font-weight:bold; color:#1f77b4; margin-bottom:10px;"></div>
-                    <pre id="p-exp" style="background:#f0f2f6; padding:15px; border-radius:8px; white-space:pre-wrap; font-family:monospace;"></pre>
+                # Adicionar painel e estilos ANTES do </body>
+                painel_html = """
+                <div id="dax-panel" style="position:fixed; top:20px; right:20px; width:500px; max-height:85vh; background:#ffffff; border-radius:12px; padding:20px; overflow-y:auto; z-index:99999; display:none; box-shadow:0 4px 16px rgba(0,0,0,0.15); border:1px solid #e6e9ef; font-family: sans-serif;">
+                    <button onclick="document.getElementById('dax-panel').style.display='none'" style="position:absolute; top:15px; right:15px; cursor:pointer; background:none; border:none; font-size:24px; color:#999; padding:0; width:30px; height:30px; line-height:30px; transition:color 0.2s;">&times;</button>
+                    <div id="p-title" style="font-weight:bold; color:#1f77b4; margin-bottom:12px; font-size:16px; padding-right:30px;"></div>
+                    <div id="p-exp" style="background:#282c34; padding:16px; border-radius:8px; overflow-x:auto; font-family:'Consolas', 'Monaco', 'Courier New', monospace; font-size:13px; line-height:1.3; color:#abb2bf; white-space:pre-wrap; tab-size:4;"></div>
                 </div>
-                
-                <!-- Botão Reset Visualização -->
-                <button id="reset-view-btn" onclick="resetGraphView()" style="position:fixed; bottom:0px; right:0px; z-index:99998; margin:0; background:linear-gradient(135deg, #5E9AE9 0%, #2E5090 100%); color:white; border:none; border-radius:8px; padding:10px 20px; font-size:13px; font-weight:600; font-family:'Segoe UI', sans-serif; cursor:pointer; box-shadow:none; transition:all 0.3s ease; text-align:left;">
+                <button id="reset-view-btn" onclick="resetGraphView()" style="position:fixed; bottom:20px; right:20px; z-index:99998; background:linear-gradient(135deg, #5E9AE9 0%, #2E5090 100%); color:white; border:none; border-radius:8px; padding:10px 20px; font-size:13px; font-weight:600; font-family:'Segoe UI', sans-serif; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.2); transition:all 0.3s ease;">
                     🔄 Resetar Zoom
                 </button>
+                """
+                
+                estilos_css = """
                 <style>
-                    #reset-view-btn:hover {{
-                        transform: translateY(-2px);
-                        box-shadow: none;
-                    }}
-                    #reset-view-btn:active {{
-                        transform: translateY(0px);
-                        box-shadow: none;
-                    }}
+                    #dax-panel button:hover { color: #ff4444 !important; }
+                    .dax-keyword { color: #c678dd; font-weight: bold; }
+                    .dax-function { color: #61afef; font-weight: bold; }
+                    .dax-string { color: #98c379; }
+                    .dax-comment { color: #5c6370; font-style: italic; }
+                    .dax-number { color: #d19a66; }
+                    .dax-operator { color: #56b6c2; }
+                    .dax-variable { color: #e5c07b; font-weight: bold; }
+                    .dax-table { color: #e06c75; }
+                    #reset-view-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+                    #reset-view-btn:active { transform: translateY(0px); }
                 </style>
+                """
+                
+                script_js = f"""
                 <script>
+                    console.log('[DAX Viewer] Inicializando...');
+                    
                     var infoData = {json.dumps(info_map)};
                     var depsMap = {json.dumps(d_js)};
                     var modoExp = {"true" if modo_expansivel_val else "false"};
                     var coresMap = {json.dumps(cores_map)};
                     var iconesMap = {json.dumps(icones_map)};
 
+                    console.log('[DAX Viewer] Dados carregados:', Object.keys(infoData).length, 'medidas');
+                    console.log('[DAX Viewer] Painel elemento:', document.getElementById('dax-panel'));
 
-                    // Função para resetar visualização do grafo
+                    // Função de syntax highlighting simplificada
+                    function highlightDAX(code) {{
+                        if (!code || code === 'Sem DAX') return code;
+                        
+                        var esc = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        
+                        // Comentários (PRIMEIRO - para proteger strings e código dentro de comentários)
+                        esc = esc.replace(/(--[^\\n]*)/g, '###COMMENT_START###$1###COMMENT_END###');
+                        esc = esc.replace(/(\/\/[^\\n]*)/g, '###COMMENT_START###$1###COMMENT_END###');
+                        
+                        // Strings (SEGUNDO - para proteger conteúdo de strings)
+                        esc = esc.replace(/"([^"]*)"/g, '###STRING_START###"$1"###STRING_END###');
+                        
+                        // Números
+                        esc = esc.replace(/\\b(\\d+(?:\\.\\d+)?)\\b/g, '###NUMBER_START###$1###NUMBER_END###');
+                        
+                        // Operadores (ANTES de keywords para não interferir com atributos HTML)
+                        esc = esc.replace(/(&&)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(\\|\\|)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(&lt;=)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(&gt;=)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(&lt;&gt;)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(&lt;)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(&gt;)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(\\+)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(-)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(\\*)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(\\/)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        esc = esc.replace(/(=)/g, '###OPERATOR_START###$1###OPERATOR_END###');
+                        
+                        // Keywords
+                        var kw = ['VAR', 'RETURN', 'IF', 'THEN', 'ELSE', 'SWITCH', 'TRUE', 'FALSE', 'IN', 'NOT', 'AND', 'OR', 'BLANK'];
+                        kw.forEach(function(k) {{
+                            var re = new RegExp('\\\\b(' + k + ')\\\\b', 'gi');
+                            esc = esc.replace(re, '###KEYWORD_START###$1###KEYWORD_END###');
+                        }});
+                        
+                        // Funções
+                        var fn = ['CALCULATE', 'CALCULATETABLE', 'FILTER', 'ALL', 'ALLEXCEPT', 'ALLSELECTED',
+                            'SUM', 'SUMX', 'AVERAGE', 'AVERAGEX', 'COUNT', 'COUNTROWS', 'COUNTA', 'COUNTX',
+                            'MIN', 'MINX', 'MAX', 'MAXX', 'DISTINCTCOUNT', 'DIVIDE',
+                            'RELATED', 'RELATEDTABLE', 'USERELATIONSHIP', 'VALUES', 'DISTINCT',
+                            'ADDCOLUMNS', 'SUMMARIZE', 'GROUPBY', 'EARLIER', 'EARLIEST', 'RANKX', 'TOPN',
+                            'CALENDAR', 'CALENDARAUTO', 'DATE', 'TODAY', 'NOW', 'YEAR', 'MONTH', 'DAY',
+                            'DATESYTD', 'DATEADD', 'SAMEPERIODLASTYEAR', 'TOTALYTD', 'PARALLELPERIOD',
+                            'ISBLANK', 'IFERROR', 'HASONEVALUE', 'SELECTEDVALUE',
+                            'FORMAT', 'CONCATENATE', 'CONCATENATEX', 'LEFT', 'RIGHT', 'MID', 'LEN',
+                            'KEEPFILTERS', 'REMOVEFILTERS', 'TREATAS', 'CROSSFILTER',
+                            'GENERATE', 'GENERATEALL', 'ROW', 'UNION', 'INTERSECT', 'EXCEPT',
+                            'LOOKUPVALUE', 'SEARCH', 'FIND', 'CONTAINS'];
+                        fn.forEach(function(f) {{
+                            var re = new RegExp('\\\\b(' + f + ')\\\\s*\\\\(', 'gi');
+                            esc = esc.replace(re, '###FUNCTION_START###$1###FUNCTION_END###(');
+                        }});
+                        
+                        // Variáveis (após VAR)
+                        esc = esc.replace(/(###KEYWORD_START###VAR###KEYWORD_END###)\\s+(\\w+)/gi, 
+                            '$1 ###VARIABLE_START###$2###VARIABLE_END###');
+                        
+                        // Tabelas e Colunas
+                        esc = esc.replace(/(\\w+)\\[([^\\]]+)\\]/g, 
+                            '###TABLE_START###$1###TABLE_END###[###VARIABLE_START###$2###VARIABLE_END###]');
+                        
+                        // Converter marcadores para HTML (ÚLTIMO PASSO)
+                        esc = esc.replace(/###COMMENT_START###/g, '<span class="dax-comment">');
+                        esc = esc.replace(/###COMMENT_END###/g, '</span>');
+                        esc = esc.replace(/###STRING_START###/g, '<span class="dax-string">');
+                        esc = esc.replace(/###STRING_END###/g, '</span>');
+                        esc = esc.replace(/###NUMBER_START###/g, '<span class="dax-number">');
+                        esc = esc.replace(/###NUMBER_END###/g, '</span>');
+                        esc = esc.replace(/###KEYWORD_START###/g, '<span class="dax-keyword">');
+                        esc = esc.replace(/###KEYWORD_END###/g, '</span>');
+                        esc = esc.replace(/###FUNCTION_START###/g, '<span class="dax-function">');
+                        esc = esc.replace(/###FUNCTION_END###/g, '</span>');
+                        esc = esc.replace(/###VARIABLE_START###/g, '<span class="dax-variable">');
+                        esc = esc.replace(/###VARIABLE_END###/g, '</span>');
+                        esc = esc.replace(/###TABLE_START###/g, '<span class="dax-table">');
+                        esc = esc.replace(/###TABLE_END###/g, '</span>');
+                        esc = esc.replace(/###OPERATOR_START###/g, '<span class="dax-operator">');
+                        esc = esc.replace(/###OPERATOR_END###/g, '</span>');
+                        
+                        return esc;
+                    }}
+
                     function resetGraphView() {{
                         try {{
-                            // Verificar se network está disponível
                             if (typeof network !== 'undefined' && network) {{
-                                network.fit({{
-                                    animation: {{
-                                        duration: 500,
-                                        easingFunction: 'easeInOutQuad'
-                                    }}
-                                }});
+                                network.fit({{animation: {{duration: 500, easingFunction: 'easeInOutQuad'}}}});
                             }} else {{
-                                console.warn('Network ainda não está inicializado');
-                                // Tentar novamente após 100ms
                                 setTimeout(resetGraphView, 100);
                             }}
                         }} catch(e) {{
-                            console.error('Erro ao resetar visualização:', e);
-                            alert('Não foi possível resetar a visualização. Recarregue a página.');
+                            console.error('[DAX Viewer] Erro ao resetar:', e);
                         }}
                     }}
 
@@ -1522,81 +1649,114 @@ if uploaded_file:
                                 }} catch(e) {{}}
                             }});
                         }}
-                        // Restaurar estado visual do nó pai (⊕ e cor padrão)
                         var t = (infoData[noId] && infoData[noId].tipo) ? infoData[noId].tipo : "UNKNOWN";
                         var ic = iconesMap[t] || "❓";
                         var cr = coresMap[t] || "#CCCCCC";
-                        nodes.update({{
-                            id: noId, 
-                            label: ic + " " + noId + " ⊕", 
-                            color: {{border: cr, background: cr}},
-                            borderWidth: 3
-                        }});
+                        nodes.update({{id: noId, label: ic + " " + noId + " ⊕", color: {{border: cr, background: cr}}, borderWidth: 3}});
                     }}
 
-                    network.on("click", (p) => {{ 
-                        if(p.nodes.length) {{ 
-                            var id = p.nodes[0]; 
-                            var it = infoData[id] || {{exp: 'Sem DAX', tipo: 'UNKNOWN'}}; 
-                            document.getElementById('p-title').innerText = id; 
-                            document.getElementById('p-exp').innerText = it.exp; 
-                            document.getElementById('dax-panel').style.display = 'block'; 
+                    // Aguardar network estar pronto
+                    function setupClickHandler() {{
+                        if (typeof network === 'undefined') {{
+                            console.log('[DAX Viewer] Aguardando network...');
+                            setTimeout(setupClickHandler, 100);
+                            return;
+                        }}
+                        
+                        console.log('[DAX Viewer] Network pronto! Registrando evento de clique...');
+                        
+                        network.on("click", function(params) {{
+                            console.log('[DAX Viewer] Click detectado!', params);
+                            
+                            if(params.nodes && params.nodes.length > 0) {{
+                                var nodeId = params.nodes[0];
+                                console.log('[DAX Viewer] Nó clicado:', nodeId);
+                                
+                                var nodeInfo = infoData[nodeId] || {{exp: 'Sem informação disponível', tipo: 'UNKNOWN'}};
+                                console.log('[DAX Viewer] Info do nó:', nodeInfo);
+                                
+                                // Atualizar título
+                                var titleEl = document.getElementById('p-title');
+                                if (titleEl) {{
+                                    titleEl.textContent = nodeId;
+                                    console.log('[DAX Viewer] Título atualizado');
+                                }} else {{
+                                    console.error('[DAX Viewer] Elemento p-title não encontrado!');
+                                }}
+                                
+                                // Atualizar código com highlighting
+                                var expEl = document.getElementById('p-exp');
+                                if (expEl) {{
+                                    var highlighted = highlightDAX(nodeInfo.exp || 'Sem DAX');
+                                    console.log('[DAX Viewer] HTML gerado:', highlighted.substring(0, 200));
+                                    expEl.innerHTML = highlighted;
+                                    console.log('[DAX Viewer] Código atualizado');
+                                }} else {{
+                                    console.error('[DAX Viewer] Elemento p-exp não encontrado!');
+                                }}
+                                
+                                // Mostrar painel
+                                var panel = document.getElementById('dax-panel');
+                                if (panel) {{
+                                    panel.style.display = 'block';
+                                    console.log('[DAX Viewer] Painel exibido!');
+                                }} else {{
+                                    console.error('[DAX Viewer] Elemento dax-panel não encontrado!');
+                                }}
 
-                            if (modoExp) {{
-                                var d = depsMap[id];
-                                if (d && d.filhos && d.filhos.length) {{
-                                    var jaExpandido = false;
-                                    try {{
-                                        var connectedNodes = network.getConnectedNodes(id);
-                                        jaExpandido = d.filhos.some(fId => connectedNodes.includes(fId));
-                                    }} catch(e) {{}}
+                                // Lógica de expansão
+                                if (modoExp) {{
+                                    var d = depsMap[nodeId];
+                                    if (d && d.filhos && d.filhos.length) {{
+                                        var jaExpandido = false;
+                                        try {{
+                                            var connectedNodes = network.getConnectedNodes(nodeId);
+                                            jaExpandido = d.filhos.some(fId => connectedNodes.includes(fId));
+                                        }} catch(e) {{}}
 
-                                    if (jaExpandido) {{
-                                        colapsarRecursivo(id);
-                                    }} else {{
-                                        // EXPANDIR: Mudar ícone para ⊖ e borda para Vermelho
-                                        var icPrincipal = iconesMap[it.tipo] || "❓";
-                                        nodes.update({{
-                                            id: id, 
-                                            label: icPrincipal + " " + id + " ⊖", 
-                                            color: {{border: "#FF4B4B"}}, 
-                                            borderWidth: 4
-                                        }});
-
-                                        d.filhos.forEach((f, idx) => {{
-                                            var t_f = d.tipos[idx];
-                                            var ic_f = iconesMap[t_f] || "❓";
-                                            var cr_f = coresMap[t_f] || "#CCCCCC";
-                                            
-                                            try {{
-                                                if (!nodes.get(f)) {{
-                                                    var temFilhos = (depsMap[f] && depsMap[f].filhos && depsMap[f].filhos.length > 0);
-                                                    nodes.add({{
-                                                        id: f, 
-                                                        label: ic_f + " " + f + (temFilhos ? " ⊕" : ""), 
-                                                        color: cr_f, 
-                                                        shape: "box",
-                                                        font: {{face: "Segoe UI", size: 14, bold: temFilhos}},
-                                                        borderWidth: temFilhos ? 3 : 1
-                                                    }});
-                                                }}
-                                                edges.add({{from: id, to: f, color: "#CCCCCC", width: 1}});
-                                            }} catch(e) {{}}
-                                        }});
+                                        if (jaExpandido) {{
+                                            colapsarRecursivo(nodeId);
+                                        }} else {{
+                                            var icPrincipal = iconesMap[nodeInfo.tipo] || "❓";
+                                            nodes.update({{id: nodeId, label: icPrincipal + " " + nodeId + " ⊖", color: {{border: "#FF4B4B"}}, borderWidth: 4}});
+                                            d.filhos.forEach((f, idx) => {{
+                                                var t_f = d.tipos[idx];
+                                                var ic_f = iconesMap[t_f] || "❓";
+                                                var cr_f = coresMap[t_f] || "#CCCCCC";
+                                                try {{
+                                                    if (!nodes.get(f)) {{
+                                                        var temFilhos = (depsMap[f] && depsMap[f].filhos && depsMap[f].filhos.length > 0);
+                                                        nodes.add({{id: f, label: ic_f + " " + f + (temFilhos ? " ⊕" : ""), color: cr_f, shape: "box", font: {{face: "Segoe UI", size: 14, bold: temFilhos}}, borderWidth: temFilhos ? 3 : 1}});
+                                                    }}
+                                                    edges.add({{from: nodeId, to: f, color: "#CCCCCC", width: 1}});
+                                                }} catch(e) {{}}
+                                            }});
+                                        }}
                                     }}
                                 }}
+                            }} else {{
+                                console.log('[DAX Viewer] Nenhum nó selecionado');
                             }}
-                        }} 
-                    }});
+                        }});
+                        
+                        console.log('[DAX Viewer] Evento registrado com sucesso!');
+                    }}
+                    
+                    // Iniciar configuração
+                    setupClickHandler();
                 </script>
                 """
+                
+                # Injetar HTML no corpo do grafo
+                html_final = h_base.replace("</body>", f"{estilos_css}{painel_html}{script_js}</body>")
+                
                 st.subheader("Visualização do Grafo")
-                components.html(h_base.replace("</body>", f"{script_js}</body>"), height=650)
+                components.html(html_final, height=650)
 
                 # 6. Exportação Sidebar
                 with export_placeholder:
                     st.sidebar.markdown("---")
-                    st.sidebar.download_button("📸 Exportar Grafo (HTML)", h_base.replace("</body>", f"{script_js}</body>"), "grafo.html", "text/html", type="primary", use_container_width=True)
+                    st.sidebar.download_button("📸 Exportar Grafo (HTML)", html_final, "grafo.html", "text/html", type="primary", use_container_width=True)
 
                 # 7. Análise de Impacto Detalhada
                 st.markdown("---")
@@ -1618,7 +1778,6 @@ if uploaded_file:
                                         meds_raw_pg = str(row_pg['Medidas'])
                                         if meds_raw_pg and meds_raw_pg != 'nan' and meds_raw_pg != 'None':
                                             meds_in_pg = [x.strip() for x in meds_raw_pg.split(',') if x.strip()]
-                                            # Verificação exata (não substring)
                                             if m_name in meds_in_pg:
                                                 paginas_uso.append(row_pg['Página'])
                                     
