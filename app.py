@@ -762,6 +762,9 @@ def extract_visual_info(visual_path):
         if "visual" in visual_data and isinstance(visual_data["visual"], dict):
             if "query" in visual_data["visual"]: measures = extract_measures_from_query(visual_data["visual"]["query"])
             if "objects" in visual_data["visual"]: measures.extend(extract_measures_from_query(visual_data["visual"]["objects"]))
+            # Detectar medidas em formatação condicional
+            if "visualContainerObjects" in visual_data["visual"]: measures.extend(extract_measures_from_query(visual_data["visual"]["visualContainerObjects"]))
+            if "singleVisual" in visual_data["visual"]: measures.extend(extract_measures_from_query(visual_data["visual"]["singleVisual"]))
         return {"visual_name": v_name, "visual_type": v_type, "measures": sorted(list(set(measures)))}
     except: return None
 
@@ -822,6 +825,14 @@ if uploaded_file:
                 # 2. Processar TMDL
                 with st.spinner("🔄 Analisando medidas e dependências..."):
                     df = build_dependency_dataframe(tmdl_folder)
+                    
+                    # Ler TODAS as medidas do modelo (incluindo isoladas)
+                    tmdl_files = list(Path(tmdl_folder).glob('*.tmdl'))
+                    todas_medidas_modelo = set()
+                    for tmdl_file in tmdl_files:
+                        measures = parse_tmdl_file_cached(str(tmdl_file))
+                        for m in measures:
+                            todas_medidas_modelo.add(m[0])  # m é tupla (name, expression)
                 
                 if df is None or df.empty:
                     st.error("❌ Nenhuma medida ou dependência encontrada.")
@@ -837,6 +848,7 @@ if uploaded_file:
                 st.session_state.current_file_key = file_key
                 st.session_state.df_cached = df.copy()
                 st.session_state.df_st_cached = df_st_new.copy() if df_st_new is not None else None
+                st.session_state.todas_medidas_modelo = todas_medidas_modelo  # Salvar TODAS as medidas
                 
                 # Limpar caches de análise (forçar recalculo para novo arquivo)
                 for cache_key in ['analise_global_cache', 'relatorios_global_cache', 'pages_analysis_cache']:
@@ -958,9 +970,13 @@ if uploaded_file:
             # --- CÁLCULO DE DESCARTE SEGURO (PARA O DASHBOARD) - CACHE ---
             cache_key = 'analise_global_cache'
             if cache_key not in st.session_state:
-                # Calcular medidas em visuais (otimizado)
-                todas_as_medidas = set(m for m, info in info_map.items() if info.get("tipo") == "MEASURE")
-                medidas_usadas_em_formulas = set(df[col_origem].unique())
+                # Pegar TODAS as medidas do modelo (incluindo isoladas sem dependências)
+                todas_as_medidas = st.session_state.get('todas_medidas_modelo', set())
+                
+                # Medidas que SÃO USADAS por outras medidas (aparecem na coluna Destino)
+                medidas_usadas_destino = set(d for d in df[col_destino].unique() if d in todas_as_medidas)
+                
+                # Medidas em visuais
                 medidas_em_visuais_global = set()
                 if df_st is not None:
                     for _, r in df_st.iterrows():
@@ -969,7 +985,8 @@ if uploaded_file:
                             for m_ctx in [x.strip() for x in m_raw.split(',') if x.strip()]:
                                 medidas_em_visuais_global.add(m_ctx)
                 
-                candidatas_descarte_global = todas_as_medidas - medidas_usadas_em_formulas - medidas_em_visuais_global
+                # Candidatas = medidas que NÃO são usadas por outras E NÃO estão em visuais
+                candidatas_descarte_global = todas_as_medidas - medidas_usadas_destino - medidas_em_visuais_global
                 
                 # Construir grafo completo (PESADO - cachear!)
                 G_full = nx.from_pandas_edgelist(df, col_origem, col_destino, create_using=nx.DiGraph())
@@ -1261,24 +1278,20 @@ if uploaded_file:
             st.markdown("---")
             st.markdown("##### 🧹 Sugestão de Descarte Seguro")
             
-            # Identificar todas as medidas reais (tipo MEASURE)
-            todas_as_medidas = set(m for m, info in info_map.items() if info.get("tipo") == "MEASURE")
+            # DEBUG: Verificar se medida específica está mapeada
+            with st.expander("🔍 Debug: Verificar medida específica"):
+                medida_teste = st.text_input("Nome da medida para verificar:")
+                if medida_teste:
+                    st.write(f"**Medida existe no modelo?** {medida_teste in st.session_state.get('todas_medidas_modelo', set())}")
+                    st.write(f"**Aparece em Destino (usada por outras)?** {medida_teste in set(df[col_destino].unique())}")
+                    st.write(f"**Aparece em visuais?** {medida_teste in medidas_em_visuais_global}")
+                    # Buscar quem usa essa medida
+                    quem_usa = df[df[col_destino] == medida_teste][col_origem].tolist()
+                    if quem_usa:
+                        st.write(f"**Usada por:** {', '.join(quem_usa)}")
             
-            # 1. Medidas que servem de base para outras (origens no grafo)
-            medidas_usadas_em_formulas = set(df[col_origem].unique())
-            
-            # 2. Medidas usadas em visuais (extraído do report)
-            medidas_em_visuais = set()
-            if df_st is not None:
-                for _, r in df_st.iterrows():
-                    m_raw = str(r['Medidas'])
-                    if m_raw and m_raw != 'nan' and m_raw != 'None':
-                        for m_ctx in [x.strip() for x in m_raw.split(',') if x.strip()]:
-                            medidas_em_visuais.add(m_ctx)
-            
-            # Descarte Seguro: Não é base de nada E não está em nenhum visual
-            candidatas_descarte = todas_as_medidas - medidas_usadas_em_formulas - medidas_em_visuais
-            lista_descarte = sorted(list(candidatas_descarte))
+            # Usar o cálculo global já feito (não recalcular)
+            lista_descarte = sorted(list(candidatas_descarte_global))
             
             if lista_descarte:
                 st.warning(f"💡 Encontramos **{len(lista_descarte)}** medidas que parecem não ter uso no relatório ou no modelo.")
